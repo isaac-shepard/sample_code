@@ -64,7 +64,7 @@ clustdat<-merge(sites3,sitemeta,by='SiteID')
 ### check for normality
 clustdat3.us<-clustdat[,c(3:7,9)]
 
-mshapiro.test(t(clustdat3.us)) #pvalue greater than 0.05
+mshapiro.test(t(clustdat3.us))
 
 mvn(clustdat3.us,mvnTest='mardia')
 ```
