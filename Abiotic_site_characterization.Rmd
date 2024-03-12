@@ -51,7 +51,9 @@ colnames(fragstats)[2]<-'SiteID'
 sites3<-merge(fragstats,sites)
 ```
 
-## First, let's just characterize the fragmentation across habitats. This will allow us to identify which fragmentation metrics best describe the overall fragmentation of the sites
+## First, let's just characterize the fragmentation across habitats.
+
+### This will allow us to determine which indices best characterize the fragmentation of the sites.
 
 Before we do a cluster analysis and PCA, lets check for multivariate normality
 
