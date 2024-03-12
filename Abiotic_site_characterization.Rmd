@@ -13,8 +13,6 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r loadings,echo=T,message=FALSE,results='hide'}
 #Packages
 require(sf)
-require(terra)
-require(stringr)
 require(cluster)
 require(vegan)
 require(raster)
