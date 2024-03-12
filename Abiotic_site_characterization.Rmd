@@ -1,0 +1,222 @@
+---
+title: "Abiotic_site_characterization"
+output: html_document
+date: "2024-03-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load Packages, set file paths, read in the data
+
+```{r loadings,echo=T,message=FALSE,results='hide'}
+#Packages
+require(sf)
+require(terra)
+require(stringr)
+require(cluster)
+require(vegan)
+require(raster)
+require(factoextra)#for plotting biplots
+require(MVN) #significance testing
+require(mvnormtest) #significance testing
+
+#file paths
+root_folder<-'G:/Shared drives/MacrosystemsBiodiversity/subprojects/MSB_landuse/linear_disturbances'
+
+
+
+geofolder<-'G:/Shared drives/MacrosystemsBiodiversity/data/neon_spatial/L0'
+
+sitemeta_folder<-'G:/Shared drives/MacrosystemsBiodiversity/data/landuse/L0'
+
+#data read in
+domains<-st_read(file.path(geofolder,'NEON_Domains.shp')) #shape files of domains
+
+sites<-st_read(file.path(geofolder,'NEON_Field_Sites.shp')) #shape files of sites
+
+plots<-st_read(file.path(geofolder,'All_NEON_TOS_Plots_v9/All_NEON_TOS_Plot_Centroids_v9.shp')) #shape files of plots
+
+sitemeta<-read.csv(file.path(sitemeta_folder,'NEON_Field_Site_Metadata_20231026.csv')) #meta data about sites - inc. temp/precip
+
+fragstats<-read.csv(file.path(root_folder,'fragstats_metrics/road_metrics.csv')) #habitat fragmentation data
+```
+
+Combine the fragmentation data with the other site data
+
+```{r}
+colnames(fragstats)[2]<-'SiteID'
+
+sites3<-merge(fragstats,sites)
+```
+
+## First, let's just characterize the fragmentation across habitats. This will allow us to identify which fragmentation metrics best describe the overall fragmentation of the sites
+
+Before we do a cluster analysis and PCA, lets check for multivariate normality
+
+```{r}
+### prep the data
+colnames(sitemeta)[2]<-'SiteID'
+
+clustdat<-merge(sites3,sitemeta,by='SiteID')
+
+### check for normality
+clustdat3.us<-clustdat[,c(3:7,9)]
+
+mshapiro.test(t(clustdat3.us)) #pvalue greater than 0.05
+
+mvn(clustdat3.us,mvnTest='mardia')
+```
+
+P values were less than 0.05 - indicates non normality but that is okay. Scale the data then do a cluster analysis
+
+```{r}
+#scale data and add row names
+clustdat4<-scale(clustdat3.us)
+
+rownames(clustdat4)<-clustdat$SiteID
+
+#determine the number of clusters
+wss<-(nrow(clustdat4)-1)*sum(apply(clustdat4,2,var))
+
+for(i in 2:15){
+  wss[i]<-sum(kmeans(clustdat4,center=i)$withinss)
+}
+
+plot(1:15,wss,type='b',xlab='number of clusters',ylab='within group sum of squares') #2 clusters probably
+```
+
+Do K-means clustering and plot - also MRPP for significance of clusters
+
+```{r}
+fit2<-kmeans(clustdat4,centers=2,iter.max=10,nstart=25)
+
+clusplot(clustdat4,fit2$cluster,color=T,shade=T,labels=2)
+
+## Significance testing
+#set up data
+frag.groups<-fit2$cluster
+
+frag.dist<-vegdist(clustdat4,method='euclidean')
+#do the test
+set.seed(11)
+fragmrpp<-mrpp(frag.dist,frag.groups,permutations=1000)
+fragmrpp
+```
+
+clusters are significant
+
+## Do a PCA on the data and plot - determine which variables drive the clustering
+
+```{r}
+fit2.pc<-princomp(clustdat4,cor=T)
+summary(fit2.pc)
+fit2.pc$loadings
+
+fviz_pca_biplot(fit2.pc,col.ind=as.character(fit2$cluster),palette=c('purple','orange'))
+```
+
+Do significance testing on the loadings
+
+```{r}
+#first write a function to do the significane testing - bootstrapping method
+sigpca2<-function (x, permutations=1000, ...)
+{
+  pcnull <- princomp(x, ...)
+  res <- pcnull$loadings
+  out <- matrix(0, nrow=nrow(res), ncol=ncol(res))
+  N <- nrow(x)
+  for (i in 1:permutations) {
+    pc <- princomp(x[sample(N, replace=TRUE), ], ...)
+    pred <- predict(pc, newdata = x)
+    r <-  cor(pcnull$scores, pred)
+    k <- apply(abs(r), 2, which.max)
+    reve <- sign(diag(r[k,]))
+    sol <- pc$loadings[ ,k]
+    sol <- sweep(sol, 2, reve, "*")
+    out <- out + ifelse(res > 0, sol <=  0, sol >= 0)
+  }
+  out/permutations
+}
+
+set.seed(4)
+
+sigpca2(clustdat4, permutations=1000)
+```
+
+All loadings are significant but 'edge density' and 'aggregation index' drive PC1 the most - use these in the broader characterization
+
+# Do a cluster analysis on more abiotic factors to see the role of habitat fragmentation for driving patterning of sites
+
+## First, test for normality and prep the data
+
+```{r}
+
+### test for multivariate normality
+clustdat2.us<-clustdat[,c(3,5,40,43,44)] #chose only the fragmentation metrics with the highest loadings on PC 1 from the previous analysis
+
+mshapiro.test(t(clustdat2.us)) #pvalue less than 0.5
+
+mvn(clustdat2.us,mvnTest='mardia') #pvalue less than 0.5 - elevation and precip are the belligerents 
+
+#log transform elevation
+#log transform precip
+
+clustdat2.us$field_mean_annual_precipitation_mm<-log(clustdat2.us$field_mean_annual_precipitation_mm)
+clustdat2.us$field_mean_elevation_m<-log(clustdat2.us$field_mean_elevation_m)
+
+#try tests for normality again
+
+mshapiro.test(t(clustdat2.us)) #p < 0.05
+
+mvn(clustdat2.us,mvnTest='mardia') #p < 0.05, elevation and precip still not normal in univariate space either
+
+#standardize columns to use in cluster analysis
+
+clustdat2<-scale(clustdat[,c(3,5,40,43,44)]) #edge density and aggregation index for fragmentation - strongest PC1 variables from analysis below
+
+rownames(clustdat2)<-clustdat$SiteID
+```
+
+Now that we have transformed and set up the data, determine the number of clusters
+
+```{r}
+wss<-(nrow(clustdat2)-1)*sum(apply(clustdat2,2,var))
+
+for(i in 2:15){
+  wss[i]<-sum(kmeans(clustdat2,center=i)$withinss)
+}
+
+plot(1:15,wss,type='b',xlab='number of clusters',ylab='within group sum of squares') #looks like 2 clusters
+```
+
+## Do k-means clustering, test significance of clusters, then run a PCA on the data, same as before
+
+```{r}
+#cluster analysis
+fit1<-kmeans(clustdat2,centers=2,iter.max=10,nstart=25)
+clusplot(clustdat2,fit1$cluster,color=T,shade=T,labels=2)
+
+#significance of clusters
+envir.groups<-fit1$cluster
+
+envir.dist<-vegdist(clustdat2,method='euclidean')
+set.seed(11)
+envirmrpp<-mrpp(envir.dist,envir.groups,permutations=1000)
+envirmrpp
+
+#PCA + significance testing of loadings
+fit1.pc<-princomp(clustdat2)
+summary(fit1.pc)
+fit1.pc$loadings
+
+
+fviz_pca_biplot(fit1.pc,col.ind=as.character(fit1$cluster),palette=c('purple','orange'))
+
+set.seed(4)
+
+sigpca2(clustdat4, permutations=1000)
+```
+
+Temperature and precipitation are orthogonal to habitat fragmentation - this decoupling has some important implications. For example, biotic patterns not explained by temp/precip at these sites might instead be driven by fragmentation.
